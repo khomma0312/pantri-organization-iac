@@ -1,0 +1,104 @@
+name: Terraform Plan on Pull Request
+
+on:
+  pull_request:
+    branches: [main, prd]  # main, prdブランチへのPR時のみ実行
+    paths:
+      - 'aws-organizations/**'
+      - '.github/workflows/**'
+
+jobs:
+  terraform-plan:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 1. Master Accountの役割を引き受け
+      - name: Configure AWS Credentials (Master)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.MASTER_ACCOUNT_ID }}:role/GitHubActions-Prd-Role
+          aws-region: ap-northeast-1
+          role-session-name: GitHubActions-PR-Session
+
+      # 2. Prd Accountの役割を引き受け（将来的にクロスアカウント対応時）
+      # 現在はmaster-accountのみなので、この段階ではスキップ
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+
+      - name: Terraform Init
+        working-directory: aws-organizations/master-account
+        run: terraform init
+
+      - name: Terraform Format Check
+        working-directory: aws-organizations/master-account
+        run: terraform fmt -check
+
+      - name: Terraform Validate
+        working-directory: aws-organizations/master-account
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: aws-organizations/master-account
+        run: terraform plan -no-color > plan_output.txt
+        continue-on-error: true
+
+      - name: Comment PR with Plan
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'aws-organizations/master-account/plan_output.txt';
+
+            let planOutput = '';
+            try {
+              planOutput = fs.readFileSync(path, 'utf8');
+            } catch (error) {
+              planOutput = 'Error reading plan output: ' + error.message;
+            }
+
+            // Truncate if too long (GitHub comment limit)
+            if (planOutput.length > 60000) {
+              planOutput = planOutput.substring(0, 60000) + '\n\n... (output truncated)';
+            }
+
+            const output = `
+            ## Terraform Plan for Master Account 🚀
+
+            **Target**: AWS Organizations Master Account Infrastructure
+            **Base Branch**: \`${{ github.base_ref }}\`
+            **Head Branch**: \`${{ github.head_ref }}\`
+
+            <details>
+            <summary>📋 Show Terraform Plan</summary>
+
+            \`\`\`terraform
+            ${planOutput}
+            \`\`\`
+
+            </details>
+
+            ⚠️ **Warning**: This plan will affect the master account infrastructure if merged to the \`prd\` branch.
+
+            ### Next Steps
+            1. Review the plan output above
+            2. Ensure all changes are expected
+            3. If approved, merge this PR to deploy to production
+            `;
+
+            // 常に新しいコメントを作成
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: output
+            });

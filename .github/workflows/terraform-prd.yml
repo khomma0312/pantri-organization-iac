@@ -1,0 +1,98 @@
+name: Deploy to Production Environment
+
+on:
+  push:
+    branches: [prd]
+    paths:
+      - 'aws-organizations/**'
+      - '.github/workflows/**'
+
+jobs:
+  terraform-prd:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      # 1. Master Accountの役割を引き受け
+      - name: Configure AWS Credentials (Master)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.MASTER_ACCOUNT_ID }}:role/GitHubActions-Prd-Role
+          aws-region: ap-northeast-1
+          role-session-name: GitHubActions-Prd-Session
+      
+      # 2. 将来的にクロスアカウント対応時はここでPrd Accountの役割を引き受け
+      # 現在はmaster-accountのみなので、この段階ではスキップ
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+        
+      - name: Terraform Init
+        working-directory: aws-organizations/master-account
+        run: terraform init
+        
+      - name: Terraform Format Check
+        working-directory: aws-organizations/master-account
+        run: terraform fmt -check
+        
+      - name: Terraform Validate
+        working-directory: aws-organizations/master-account
+        run: terraform validate
+        
+      - name: Terraform Plan
+        working-directory: aws-organizations/master-account
+        run: terraform plan -no-color
+        
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/prd' && github.event_name == 'push'
+        working-directory: aws-organizations/master-account
+        run: terraform apply -auto-approve
+        
+      - name: Post-deployment Verification
+        working-directory: aws-organizations/master-account
+        run: |
+          echo "Running post-deployment checks..."
+          terraform output
+          
+          # 作成されたリソースの確認
+          echo "Verifying OIDC Provider..."
+          aws iam list-open-id-connect-providers
+          
+          echo "Verifying IAM Roles..."
+          aws iam get-role --role-name GitHubActions-Dev-Role || echo "Dev role not found"
+          aws iam get-role --role-name GitHubActions-Prd-Role || echo "Prd role not found"
+        
+      - name: Notify Success
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'success',
+              description: 'Master account deployment completed successfully',
+              context: 'terraform/master-account'
+            });
+            
+      - name: Notify Failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'failure',
+              description: 'Master account deployment failed',
+              context: 'terraform/master-account'
+            });
