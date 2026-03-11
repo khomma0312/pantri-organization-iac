@@ -1,0 +1,87 @@
+name: Deploy to Production Environment
+
+on:
+  push:
+    branches: [prd]
+    paths:
+      - 'aws-organizations/**'
+
+jobs:
+  terraform-prd:
+    runs-on: ubuntu-latest
+    environment: prd
+    env:
+      MASTER_ACCOUNT_ID: ${{ secrets.MASTER_ACCOUNT_ID }}
+      IAM_DEPLOY_ROLE: ${{ vars.IAM_DEPLOY_ROLE }}
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 1. Master Accountの役割を引き受け
+      - name: Configure AWS Credentials (Master)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.MASTER_ACCOUNT_ID }}:role/${{ env.IAM_DEPLOY_ROLE }}
+          aws-region: ap-northeast-1
+          role-session-name: GitHubActions-Prd-Session
+
+      # 2. 将来的にクロスアカウント対応時はここでPrd Accountの役割を引き受け
+      # 現在はmaster-accountのみなので、この段階ではスキップ
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+
+      - name: Terraform Init
+        working-directory: aws-organizations/master-account
+        run: terraform init
+
+      - name: Terraform Format Check
+        working-directory: aws-organizations/master-account
+        run: terraform fmt -check
+
+      - name: Terraform Validate
+        working-directory: aws-organizations/master-account
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: aws-organizations/master-account
+        run: terraform plan -no-color
+
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/prd' && github.event_name == 'push'
+        working-directory: aws-organizations/master-account
+        run: terraform apply -auto-approve
+
+      - name: Update Commit Status - Success
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'success',
+              description: 'Master account deployment completed successfully',
+              context: 'terraform/master-account'
+            });
+
+      - name: Update Commit Status - Failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'failure',
+              description: 'Master account deployment failed',
+              context: 'terraform/master-account'
+            });
