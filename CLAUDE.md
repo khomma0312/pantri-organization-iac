@@ -326,14 +326,19 @@ resource "aws_iam_role_policy" "terraform_execution_prd_policy" {
 name: Terraform Plan on Pull Request
 
 on:
-  pull_request:  # 任意のブランチからprdへのPR作成・更新時に実行
-    branches: [prd]  # ベースブランチがprdの場合のみ
-    paths:  # 以下のパスに変更がある場合のみ実行
+  pull_request:
+    branches: [main, prd]  # main, prdブランチへのPR時のみ実行
+    paths:
       - 'aws-organizations/**'
+      - '.github/workflows/**'
 
 jobs:
   terraform-plan:
     runs-on: ubuntu-latest
+    environment: prd
+    env:
+      MASTER_ACCOUNT_ID: ${{ secrets.MASTER_ACCOUNT_ID }}
+      IAM_DEPLOY_ROLE: ${{ vars.IAM_DEPLOY_ROLE }}
     permissions:
       id-token: write
       contents: read
@@ -347,7 +352,7 @@ jobs:
       - name: Configure AWS Credentials (Master)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::${{ vars.MASTER_ACCOUNT_ID }}:role/GitHubActions-Prd-Role
+          role-to-assume: arn:aws:iam::${{ env.MASTER_ACCOUNT_ID }}:role/${{ env.IAM_DEPLOY_ROLE }}
           aws-region: ap-northeast-1
           role-session-name: GitHubActions-PR-Session
       
@@ -454,16 +459,23 @@ jobs:
 ### 2. 本番環境デプロイ（prd ブランチ）
 
 ```yaml
-# .github/workflows/terraform-prd.yml
+# .github/workflows/terraform-deploy.yml
 name: Deploy to Production Environment
 
 on:
   push:
     branches: [prd]
+    paths:
+      - 'aws-organizations/**'
+      - '.github/workflows/**'
 
 jobs:
   terraform-prd:
     runs-on: ubuntu-latest
+    environment: prd
+    env:
+      MASTER_ACCOUNT_ID: ${{ secrets.MASTER_ACCOUNT_ID }}
+      IAM_DEPLOY_ROLE: ${{ vars.IAM_DEPLOY_ROLE }}
     permissions:
       id-token: write
       contents: read
@@ -476,7 +488,7 @@ jobs:
       - name: Configure AWS Credentials (Master)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::${{ vars.MASTER_ACCOUNT_ID }}:role/GitHubActions-Prd-Role
+          role-to-assume: arn:aws:iam::${{ env.MASTER_ACCOUNT_ID }}:role/${{ env.IAM_DEPLOY_ROLE }}
           aws-region: ap-northeast-1
           role-session-name: GitHubActions-Prd-Session
       
@@ -761,13 +773,15 @@ resource "aws_iam_role_policy" "terraform_execution_prd_policy" {
 
 ## 必要な GitHub Settings
 
-### Variables
+### Environment Secrets (prd environment)
 - `MASTER_ACCOUNT_ID`: Master Account ID
-- `DEV_ACCOUNT_ID`: Dev Account ID
-- `PRD_ACCOUNT_ID`: Prd Account ID
+
+### Environment Variables (prd environment)  
+- `IAM_DEPLOY_ROLE`: IAM role name for deployment (例: GitHubActions-Prd-Role)
 
 ### Environments
-特に設定不要（手動承認なし）
+- `prd` environment の作成が必要
+- 手動承認設定は任意
 
 ### Repository Settings
 - Actions permissions: "Allow all actions and reusable workflows"
