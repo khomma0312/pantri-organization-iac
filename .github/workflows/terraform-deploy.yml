@@ -58,7 +58,7 @@ jobs:
         working-directory: aws-organizations/master-account
         run: terraform apply -auto-approve
 
-      - name: Notify Success
+      - name: Update Commit Status - Success
         if: success()
         uses: actions/github-script@v7
         with:
@@ -72,7 +72,7 @@ jobs:
               context: 'terraform/master-account'
             });
 
-      - name: Notify Failure
+      - name: Update Commit Status - Failure
         if: failure()
         uses: actions/github-script@v7
         with:
