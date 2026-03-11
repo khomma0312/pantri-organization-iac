@@ -330,7 +330,6 @@ on:
     branches: [main, prd]  # main, prdブランチへのPR時のみ実行
     paths:
       - 'aws-organizations/**'
-      - '.github/workflows/**'
 
 jobs:
   terraform-plan:
@@ -356,14 +355,8 @@ jobs:
           aws-region: ap-northeast-1
           role-session-name: GitHubActions-PR-Session
       
-      # 2. Prd Accountの役割を引き受け
-      - name: Assume Prd Account Role
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::${{ vars.PRD_ACCOUNT_ID }}:role/TerraformExecutionRole
-          aws-region: ap-northeast-1
-          role-chaining: true
-          role-session-name: TerraformExecution-PR-Session
+      # 2. Prd Accountの役割を引き受け（将来的にクロスアカウント対応時）
+      # 現在はmaster-accountのみなので、この段階ではスキップ
       
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -371,19 +364,19 @@ jobs:
           terraform_version: 1.5.0
         
       - name: Terraform Init
-        working-directory: aws-organizations
+        working-directory: aws-organizations/master-account
         run: terraform init
         
       - name: Terraform Format Check
-        working-directory: aws-organizations
+        working-directory: aws-organizations/master-account
         run: terraform fmt -check
         
       - name: Terraform Validate
-        working-directory: aws-organizations
+        working-directory: aws-organizations/master-account
         run: terraform validate
         
       - name: Terraform Plan
-        working-directory: aws-organizations
+        working-directory: aws-organizations/master-account
         run: terraform plan -no-color > plan_output.txt
         continue-on-error: true
         
@@ -392,7 +385,7 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const path = 'aws-organizations/plan_output.txt';
+            const path = 'aws-organizations/master-account/plan_output.txt';
             
             let planOutput = '';
             try {
@@ -407,9 +400,9 @@ jobs:
             }
             
             const output = `
-            ## Terraform Plan for Production Environment 🚀
+            ## Terraform Plan for Master Account 🚀
             
-            **Target**: AWS Organizations Infrastructure
+            **Target**: AWS Organizations Master Account Infrastructure
             **Base Branch**: \`${{ github.base_ref }}\`
             **Head Branch**: \`${{ github.head_ref }}\`
             
@@ -422,38 +415,21 @@ jobs:
             
             </details>
             
-            ⚠️ **Warning**: This plan will affect the production infrastructure if merged to the \`prd\` branch.
+            ⚠️ **Warning**: This plan will affect the master account infrastructure if merged to the \`prd\` branch.
+            
+            ### Next Steps
+            1. Review the plan output above
+            2. Ensure all changes are expected
+            3. If approved, merge this PR to deploy to production
             `;
             
-            // Check if there's already a comment from this bot
-            const { data: comments } = await github.rest.issues.listComments({
+            // 常に新しいコメントを作成
+            await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
+              body: output
             });
-            
-            const botComment = comments.find(comment => 
-              comment.user.login === 'github-actions[bot]' && 
-              comment.body.includes('Terraform Plan for Production Environment')
-            );
-            
-            if (botComment) {
-              // Update existing comment
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: botComment.id,
-                body: output
-              });
-            } else {
-              // Create new comment
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: output
-              });
-            }
 ```
 
 ### 2. 本番環境デプロイ（prd ブランチ）
@@ -467,7 +443,6 @@ on:
     branches: [prd]
     paths:
       - 'aws-organizations/**'
-      - '.github/workflows/**'
 
 jobs:
   terraform-prd:
@@ -492,14 +467,8 @@ jobs:
           aws-region: ap-northeast-1
           role-session-name: GitHubActions-Prd-Session
       
-      # 2. Prd Accountの役割を引き受け
-      - name: Assume Prd Account Role
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::${{ vars.PRD_ACCOUNT_ID }}:role/TerraformExecutionRole
-          aws-region: ap-northeast-1
-          role-chaining: true
-          role-session-name: TerraformExecution-Prd-Session
+      # 2. 将来的にクロスアカウント対応時はここでPrd Accountの役割を引き受け
+      # 現在はmaster-accountのみなので、この段階ではスキップ
       
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -507,34 +476,28 @@ jobs:
           terraform_version: 1.5.0
         
       - name: Terraform Init
-        working-directory: aws-organizations
+        working-directory: aws-organizations/master-account
         run: terraform init
         
       - name: Terraform Format Check
-        working-directory: aws-organizations
+        working-directory: aws-organizations/master-account
         run: terraform fmt -check
         
       - name: Terraform Validate
-        working-directory: aws-organizations
+        working-directory: aws-organizations/master-account
         run: terraform validate
         
       - name: Terraform Plan
-        working-directory: aws-organizations
+        working-directory: aws-organizations/master-account
         run: terraform plan -no-color
-        continue-on-error: true
         
       - name: Terraform Apply
         if: github.ref == 'refs/heads/prd' && github.event_name == 'push'
-        working-directory: aws-organizations
+        working-directory: aws-organizations/master-account
         run: terraform apply -auto-approve
         
-      - name: Post-deployment Verification
-        working-directory: aws-organizations
-        run: |
-          echo "Running post-deployment checks..."
-          terraform output
-          
-      - name: Notify Success
+      - name: Update Commit Status - Success
+        if: success()
         uses: actions/github-script@v7
         with:
           script: |
@@ -543,8 +506,22 @@ jobs:
               repo: context.repo.repo,
               sha: context.sha,
               state: 'success',
-              description: 'Production deployment completed successfully',
-              context: 'terraform/production'
+              description: 'Master account deployment completed successfully',
+              context: 'terraform/master-account'
+            });
+        
+      - name: Update Commit Status - Failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'failure',
+              description: 'Master account deployment failed',
+              context: 'terraform/master-account'
             });
 ```
 
