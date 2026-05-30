@@ -1,0 +1,12 @@
+# GitHub repository configuration
+github_repository = "your-org/pantri-organization-iac"
+
+# AWS Account IDs
+dev_account_id = "123456789012"
+prd_account_id = "123456789013"
+
+# External ID for secure cross-account access
+external_id = "your-secure-external-id"
+
+# AWS region
+aws_region = "ap-northeast-1"
